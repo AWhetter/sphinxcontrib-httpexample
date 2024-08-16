@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
-from docutils import nodes
 from docutils.parsers.rst import directives
 from docutils.statemachine import StringList
-from sphinx.directives.code import CodeBlock
+from sphinx_tabs.tabs import CodeTabDirective, TabsDirective
 from sphinxcontrib.httpexample import builders
 from sphinxcontrib.httpexample import parsers
 from sphinxcontrib.httpexample import utils
@@ -31,17 +30,32 @@ def choose_builders(arguments):
             for argument in (arguments or [])]
 
 
-class HTTPExample(CodeBlock):
+class HTTPExample(TabsDirective):
 
     required_arguments = 0
     optional_arguments = len(AVAILABLE_BUILDERS)
 
-    option_spec = utils.merge_dicts(CodeBlock.option_spec, {
+    option_spec = utils.merge_dicts(CodeTabDirective.option_spec, {
         'request': directives.unchanged,
         'response': directives.unchanged,
     })
 
     def run(self):
+        self._old_parse = self.state.nested_parse
+        self.state.nested_parse = (lambda *args: self.nested_parse(args[-1]))
+        result = super(HTTPExample, self).run()
+
+        return result
+
+    def assert_has_content(self):
+        # The tabs directive wants content, but we don't need it because we generate out own.
+        pass
+
+    def nested_parse(self, node):
+        node['classes'].append('http-example')
+
+        self.state.nested_parse = self._old_parse
+
         config = self.state.document.settings.env.config
 
         # Read enabled builders; Defaults to None
@@ -108,17 +122,21 @@ class HTTPExample(CodeBlock):
                 response_content = StringList(
                     list(map(str.rstrip, fp.readlines())), response)
 
-        # reset the content to the request, stripped of the reST fields
-        self.content = request_content_no_fields
-
-        # Wrap and render main directive as 'http-example-http'
-        klass = 'http-example-http'
-        container = nodes.container('', classes=[klass])
-        container.append(nodes.caption('', 'http'))
-        container.extend(super(HTTPExample, self).run())
-
-        # Init result node list
-        result = [container]
+        http_tab = CodeTabDirective(
+            'code-tab',
+            # Enable 'http' language for http part
+            ['http', 'http'],
+            self.options,
+            # set the content to the request, stripped of the reST fields
+            StringList(request_content_no_fields),
+            self.lineno,
+            self.content_offset,
+            self.block_text,
+            self.state,
+            self.state_machine
+        )
+        node.extend(http_tab.run())
+        node[-1]['classes'].append('http-example-http')
 
         # reset the content to just the request
         self.content = request_content
@@ -141,9 +159,9 @@ class HTTPExample(CodeBlock):
                 options.pop('name', None)
                 options.pop('caption', None)
 
-                block = CodeBlock(
-                    'code-block',
-                    [language],
+                tab = CodeTabDirective(
+                    'code-tab',
+                    [language, name],
                     options,
                     content,
                     self.lineno,
@@ -152,15 +170,9 @@ class HTTPExample(CodeBlock):
                     self.state,
                     self.state_machine
                 )
-
-                # Wrap and render main directive as 'http-example-{name}'
+                node.extend(tab.run())
                 klass = 'http-example-{}'.format(name)
-                container = nodes.container('', classes=[klass])
-                container.append(nodes.caption('', name))
-                container.extend(block.run())
-
-                # Append to result nodes
-                result.append(container)
+                node[-1]['classes'].append(klass)
 
         # Append optional response
         if response_content:
@@ -168,29 +180,16 @@ class HTTPExample(CodeBlock):
             options.pop('name', None)
             options.pop('caption', None)
 
-            block = CodeBlock(
-                'code-block',
-                ['http'],
+            response_tab = CodeTabDirective(
+                'code-tab',
+                ['http', 'response'],
                 options,
-                response_content,
+                request_content,
                 self.lineno,
                 self.content_offset,
                 self.block_text,
                 self.state,
                 self.state_machine
             )
-
-            # Wrap and render main directive as 'http-example-response'
-            klass = 'http-example-response'
-            container = nodes.container('', classes=[klass])
-            container.append(nodes.caption('', 'response'))
-            container.extend(block.run())
-
-            # Append to result nodes
-            result.append(container)
-
-        # Final wrap
-        container_node = nodes.container('', classes=['http-example'])
-        container_node.extend(result)
-
-        return [container_node]
+            node.extend(response_tab.run())
+            node[-1]['classes'].append('http-example-response')
